@@ -126,35 +126,38 @@ type RZSet interface {
 // Redka is an abstraction for *redka.DB and *redka.Tx.
 // Used to execute commands in a unified way.
 type Redka struct {
-	hash RHash
-	key  RKey
-	list RList
-	set  RSet
-	str  RStr
-	zset RZSet
+	hash  RHash
+	key   RKey
+	list  RList
+	set   RSet
+	str   RStr
+	zset  RZSet
+	stats func() redka.Stats
 }
 
 // RedkaDB creates a new Redka instance for a database.
 func RedkaDB(db *redka.DB) Redka {
 	return Redka{
-		hash: db.Hash(),
-		key:  db.Key(),
-		list: db.List(),
-		set:  db.Set(),
-		str:  db.Str(),
-		zset: db.ZSet(),
+		hash:  db.Hash(),
+		key:   db.Key(),
+		list:  db.List(),
+		set:   db.Set(),
+		str:   db.Str(),
+		zset:  db.ZSet(),
+		stats: db.Stats,
 	}
 }
 
 // RedkaTx creates a new Redka instance for a transaction.
 func RedkaTx(tx *redka.Tx) Redka {
 	return Redka{
-		hash: tx.Hash(),
-		key:  tx.Key(),
-		list: tx.List(),
-		set:  tx.Set(),
-		str:  tx.Str(),
-		zset: tx.ZSet(),
+		hash:  tx.Hash(),
+		key:   tx.Key(),
+		list:  tx.List(),
+		set:   tx.Set(),
+		str:   tx.Str(),
+		zset:  tx.ZSet(),
+		stats: tx.Stats,
 	}
 }
 
@@ -186,4 +189,12 @@ func (r Redka) Str() RStr {
 // ZSet returns the sorted set repository.
 func (r Redka) ZSet() RZSet {
 	return r.zset
+}
+
+// Stats returns a point-in-time snapshot of the server statistics.
+func (r Redka) Stats() redka.Stats {
+	if r.stats == nil {
+		return redka.Stats{}
+	}
+	return r.stats()
 }

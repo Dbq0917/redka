@@ -30,10 +30,12 @@ func New(net string, addr string, db *redka.DB) *Server {
 	log := db.Log()
 	handler := createHandlers(db)
 	accept := func(conn redcon.Conn) bool {
+		db.RecordConnection()
 		log.Info("accept connection", "client", conn.RemoteAddr())
 		return true
 	}
 	closed := func(conn redcon.Conn, err error) {
+		db.RecordDisconnection()
 		if err != nil {
 			log.Debug("close connection", "client", conn.RemoteAddr(), "error", err)
 		} else {

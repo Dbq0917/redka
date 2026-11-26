@@ -12,7 +12,7 @@ import (
 
 // createHandlers returns the server command handlers.
 func createHandlers(db *redka.DB) redcon.HandlerFunc {
-	return logging(parse(multi(handle(db))), db.Log())
+	return logging(parse(db, multi(handle(db))), db.Log())
 }
 
 // logging logs the command processing time.
@@ -26,13 +26,14 @@ func logging(next redcon.HandlerFunc, log *slog.Logger) redcon.HandlerFunc {
 }
 
 // parse parses the command arguments.
-func parse(next redcon.HandlerFunc) redcon.HandlerFunc {
+func parse(db *redka.DB, next redcon.HandlerFunc) redcon.HandlerFunc {
 	return func(conn redcon.Conn, cmd redcon.Command) {
 		pcmd, err := command.Parse(cmd.Args)
 		if err != nil {
 			conn.WriteError(pcmd.Error(err))
 			return
 		}
+		db.RecordCommand()
 		state := getState(conn)
 		state.push(pcmd)
 		next(conn, cmd)

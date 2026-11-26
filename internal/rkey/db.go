@@ -15,10 +15,11 @@ import (
 // (string, list, hash, etc.). Use the key repository
 // to manage all keys regardless of their type.
 type DB struct {
-	dialect sqlx.Dialect
-	ro      *sql.DB
-	rw      *sql.DB
-	update  func(f func(tx *Tx) error) error
+	dialect        sqlx.Dialect
+	ro             *sql.DB
+	rw             *sql.DB
+	update         func(f func(tx *Tx) error) error
+	expiredDeleted func(count int)
 }
 
 // New creates a new database-backed key repository.
@@ -26,6 +27,11 @@ type DB struct {
 func New(db *sqlx.DB) *DB {
 	actor := sqlx.NewTransactor(db, NewTx)
 	return &DB{dialect: db.Dialect, ro: db.RO, rw: db.RW, update: actor.Update}
+}
+
+// OnExpiredDeleted sets a callback invoked after expired keys are deleted.
+func (d *DB) OnExpiredDeleted(fn func(count int)) {
+	d.expiredDeleted = fn
 }
 
 // Count returns the number of existing keys among specified.
@@ -52,7 +58,11 @@ func (d *DB) DeleteAll() error {
 // If n = 0, deletes all expired keys.
 func (d *DB) DeleteExpired(n int) (count int, err error) {
 	tx := NewTx(d.dialect, d.rw)
-	return tx.deleteExpired(n)
+	count, err = tx.deleteExpired(n)
+	if err == nil && d.expiredDeleted != nil {
+		d.expiredDeleted(count)
+	}
+	return count, err
 }
 
 // Exists reports whether the key exists.

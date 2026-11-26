@@ -95,6 +95,9 @@ var defaultOptions = Options{
 	Logger:     slog.New(slog.NewTextHandler(io.Discard, nil)),
 }
 
+// bgInterval is the interval between expired-key cleanup rounds.
+var bgInterval = 60 * time.Second
+
 // DB is a Redis-like repository backed by a relational database.
 // Provides access to data structures like keys, strings, and hashes.
 //
@@ -103,6 +106,7 @@ var defaultOptions = Options{
 type DB struct {
 	sdb      *sqlx.DB
 	act      *sqlx.Transactor[*Tx]
+	stats    *statsCollector
 	hashDB   *rhash.DB
 	keyDB    *rkey.DB
 	listDB   *rlist.DB
@@ -198,11 +202,19 @@ func OpenReadDB(db *sql.DB, opts *Options) (*DB, error) {
 
 // new creates a new database.
 func new(sdb *sqlx.DB, opts *Options) (*DB, error) {
+	stats := &statsCollector{}
+	keyDB := rkey.New(sdb)
+	keyDB.OnExpiredDeleted(stats.expiredKeysDeleted)
 	rdb := &DB{
-		sdb:      sdb,
-		act:      sqlx.NewTransactor(sdb, newTx),
+		sdb: sdb,
+		act: sqlx.NewTransactor(sdb, func(dialect sqlx.Dialect, tx sqlx.Tx) *Tx {
+			rtx := newTx(dialect, tx)
+			rtx.stats = stats
+			return rtx
+		}),
+		stats:    stats,
 		hashDB:   rhash.New(sdb),
-		keyDB:    rkey.New(sdb),
+		keyDB:    keyDB,
 		listDB:   rlist.New(sdb),
 		setDB:    rset.New(sdb),
 		stringDB: rstring.New(sdb),
@@ -313,13 +325,12 @@ func (db *DB) startBgManager() *time.Ticker {
 	// (see https://redis.io/docs/management/config-file/ > SNAPSHOTTING)
 	// And it doesn't help that SQLite's drivers do not support DELETE LIMIT,
 	// so we have to use DELETE IN (SELECT ...), which is more expensive.
-	const interval = 60 * time.Second
 	const nKeys = 0
 
-	ticker := time.NewTicker(interval)
+	ticker := time.NewTicker(bgInterval)
 	go func() {
 		for range ticker.C {
-			count, err := db.keyDB.DeleteExpired(nKeys)
+			count, err := db.DeleteExpired(nKeys)
 			if err != nil {
 				db.log.Error("bg: delete expired keys", "error", err)
 			} else {
@@ -336,6 +347,7 @@ func (db *DB) startBgManager() *time.Ticker {
 // within a transaction managed by [DB.Update] or [DB.View].
 type Tx struct {
 	tx     sqlx.Tx
+	stats  *statsCollector
 	hashTx *rhash.Tx
 	keyTx  *rkey.Tx
 	listTx *rlist.Tx
