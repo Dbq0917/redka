@@ -29,6 +29,7 @@ import (
 	"time"
 
 	"github.com/nalgeon/redka/internal/core"
+	"github.com/nalgeon/redka/internal/health"
 	"github.com/nalgeon/redka/internal/rhash"
 	"github.com/nalgeon/redka/internal/rkey"
 	"github.com/nalgeon/redka/internal/rlist"
@@ -58,6 +59,30 @@ var (
 	ErrNotFound  = core.ErrNotFound  // key or element not found
 	ErrValueType = core.ErrValueType // invalid value type
 )
+
+// IssueKind identifies a class of logical inconsistency.
+type IssueKind = health.IssueKind
+
+// Logical inconsistency kinds.
+const (
+	IssueMissingData    = health.IssueMissingData
+	IssueOrphanData     = health.IssueOrphanData
+	IssueTypeMismatch   = health.IssueTypeMismatch
+	IssueLengthMismatch = health.IssueLengthMismatch
+	IssueInvalidType    = health.IssueInvalidType
+	IssueMissingValue   = health.IssueMissingValue
+	IssueOrphanValue    = health.IssueOrphanValue
+	IssueOrphanKey      = health.IssueOrphanKey
+)
+
+// TypeReport contains the inconsistencies found for one key type.
+type TypeReport = health.TypeReport
+
+// CheckResult contains aggregate logical inconsistency counts.
+type CheckResult = health.CheckResult
+
+// RepairResult contains the number of records changed by a repair.
+type RepairResult = health.RepairResult
 
 // Key represents a key data structure.
 // Each key uniquely identifies a data structure stored in the
@@ -265,6 +290,45 @@ func (db *DB) ZSet() *rzset.DB {
 // Log returns the logger for the database.
 func (db *DB) Log() *slog.Logger {
 	return db.log
+}
+
+// Check scans the database for logical inconsistencies between keys and
+// their type-specific data. The check uses the read-only database handle
+// and does not block writes.
+func (db *DB) Check() (CheckResult, error) {
+	return health.Check(db.sdb.RO)
+}
+
+// CheckConsistency is an alias for [DB.Check].
+func (db *DB) CheckConsistency() (CheckResult, error) {
+	return db.Check()
+}
+
+// HealthCheck is an alias for [DB.Check].
+func (db *DB) HealthCheck() (CheckResult, error) {
+	return db.Check()
+}
+
+// Verify is an alias for [DB.Check].
+func (db *DB) Verify() (CheckResult, error) {
+	return db.Check()
+}
+
+// Repair removes orphaned and misplaced data, deletes keys without data,
+// and rebuilds length counters. Repair is idempotent, so running it again
+// after a successful repair makes no changes.
+func (db *DB) Repair() (RepairResult, error) {
+	return health.Repair(db.sdb.RW)
+}
+
+// RepairConsistency is an alias for [DB.Repair].
+func (db *DB) RepairConsistency() (RepairResult, error) {
+	return db.Repair()
+}
+
+// HealthRepair is an alias for [DB.Repair].
+func (db *DB) HealthRepair() (RepairResult, error) {
+	return db.Repair()
 }
 
 // Update executes a function within a writable transaction.

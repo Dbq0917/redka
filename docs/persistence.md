@@ -64,3 +64,41 @@ There is a separate view for every data type:
 ```
 vkey  vstring  vlist  vset  vhash  vzset
 ```
+
+## Logical consistency check
+
+Database-level integrity checks validate pages, but they cannot detect
+logical mismatches between `rkey` and the type-specific tables. Use
+`DB.Check` to find keys without data, data without keys, data stored under
+the wrong key type, and incorrect `len` values:
+
+```go
+report, err := db.Check()
+if err != nil {
+    log.Fatal(err)
+}
+log.Info("inconsistencies", "total", report.Total)
+for ktype, detail := range report.ByType {
+    if detail.Total > 0 {
+        log.Info("inconsistent keys", "type", ktype, "count", detail.Total)
+    }
+}
+```
+
+The check uses the read-only database handle and does not take a write lock.
+It returns aggregate counts only, so its memory use does not grow with the
+number of keys.
+
+Use `DB.Repair` to delete orphaned or misplaced data, remove keys without
+data, and rebuild collection lengths:
+
+```go
+fixed, err := db.Repair()
+if err != nil {
+    log.Fatal(err)
+}
+log.Info("repaired records", "total", fixed.Total)
+```
+
+Repair is idempotent. Running it again after a successful repair makes no
+changes.
