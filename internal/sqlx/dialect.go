@@ -61,6 +61,9 @@ func (d Dialect) Enumerate(query string) string {
 // GlobToLike creates a like-style pattern from a glob-style pattern.
 // Only supports * and ? wildcards, not [abc] and [!abc].
 // Escapes % and _ special characters with a backslash.
+//
+// Deprecated: pattern matching is performed by core.MatchGlob so that
+// all SQL backends use identical glob semantics.
 func (d Dialect) GlobToLike(pattern string) string {
 	if d == DialectSqlite {
 		// SQLite supports glob-style patterns.

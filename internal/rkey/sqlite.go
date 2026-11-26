@@ -38,10 +38,6 @@ var sqlite = queries{
 	from rkey
 	where key = $1 and (etime is null or etime > $2)`,
 
-	keys: `
-	select id, key, type, version, etime, mtime from rkey
-	where key glob $1 and (etime is null or etime > $2)`,
-
 	len: `
 	select count(*) from rkey`,
 
@@ -66,12 +62,4 @@ var sqlite = queries{
 		version = version + 1,
 		mtime = $2
 	where key = $3 and (etime is null or etime > $4)`,
-
-	scan: `
-	select id, key, type, version, etime, mtime from rkey
-	where
-		id > $1 and key glob $2 and (type = $3 or $4)
-		and (etime is null or etime > $5)
-	order by id asc
-	limit $6`,
 }

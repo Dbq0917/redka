@@ -146,8 +146,8 @@ var sqlite = queries{
 	from rzset join rkey on kid = rkey.id and type = 5
 	where
 		key = $1 and (etime is null or etime > $2)
-		and rzset.rowid > $3 and elem glob $4
-	limit $5`,
+		and rzset.rowid > $3
+	limit $4`,
 
 	union: `
 	select elem, sum(score) as score

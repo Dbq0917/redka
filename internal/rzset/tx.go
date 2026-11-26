@@ -13,6 +13,9 @@ import (
 // of set items per page when scanning.
 const scanPageSize = 10
 
+// scanCandidateBatch is the number of items fetched per database round trip.
+const scanCandidateBatch = 256
+
 // SQL queries for the sorted set repository.
 type queries struct {
 	add1        string
@@ -263,26 +266,49 @@ func (tx *Tx) RangeWith(key string) RangeCmd {
 // If the key does not exist or is not a set, returns a nil slice.
 // Supports glob-style patterns. Set count = 0 for default page size.
 func (tx *Tx) Scan(key string, cursor int, pattern string, count int) (ScanResult, error) {
-	pattern = tx.dialect.GlobToLike(pattern)
 	if count == 0 {
 		count = scanPageSize
 	}
 
-	// Select set items matching the pattern.
-	args := []any{
-		key, time.Now().UnixMilli(),
-		cursor, pattern, count,
-	}
-	scan := func(rows *sql.Rows) (SetItem, error) {
-		var it SetItem
-		var elem []byte
-		err := rows.Scan(&it.id, &elem, &it.Score)
-		it.Elem = core.Value(elem)
-		return it, err
-	}
-	items, err := sqlx.Select(tx.tx, tx.sql.scan, args, scan)
-	if err != nil {
-		return ScanResult{}, err
+	now := time.Now().UnixMilli()
+	scanCursor := cursor
+	var items []SetItem
+
+	for len(items) < count {
+		args := []any{key, now, scanCursor, scanCandidateBatch}
+		rows, err := tx.tx.Query(tx.sql.scan, args...)
+		if err != nil {
+			return ScanResult{}, err
+		}
+
+		fetched := 0
+		for rows.Next() {
+			var it SetItem
+			var elem []byte
+			err = rows.Scan(&it.id, &elem, &it.Score)
+			if err != nil {
+				_ = rows.Close()
+				return ScanResult{}, err
+			}
+			it.Elem = core.Value(elem)
+			fetched++
+			scanCursor = it.id
+			if !core.MatchGlob(pattern, string(it.Elem)) {
+				continue
+			}
+			items = append(items, it)
+			if len(items) == count {
+				break
+			}
+		}
+		err = rows.Err()
+		_ = rows.Close()
+		if err != nil {
+			return ScanResult{}, err
+		}
+		if fetched < scanCandidateBatch {
+			break
+		}
 	}
 
 	// Select the maximum ID.

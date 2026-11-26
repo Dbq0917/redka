@@ -285,6 +285,104 @@ func TestKeys(t *testing.T) {
 	}
 }
 
+func TestKeysFragments(t *testing.T) {
+	db, kkey := getDB(t)
+
+	for _, key := range []string{
+		"user:1:profile",
+		"user:2:profile",
+		"user:2:settings",
+		"order:1:profile",
+		"api.example.com",
+		"api.example.net",
+		"legacyprofile",
+		"literal*key",
+	} {
+		_ = db.Str().Set(key, "value")
+	}
+
+	tests := []struct {
+		name    string
+		pattern string
+		want    []string
+	}{
+		{
+			name:    "middle part",
+			pattern: "user:*:profile",
+			want:    []string{"user:1:profile", "user:2:profile"},
+		},
+		{
+			name:    "suffix part",
+			pattern: "*:profile",
+			want:    []string{"user:1:profile", "user:2:profile", "order:1:profile"},
+		},
+		{
+			name:    "suffix",
+			pattern: "*.com",
+			want:    []string{"api.example.com"},
+		},
+		{
+			name:    "suffix inside part",
+			pattern: "*profile",
+			want: []string{
+				"user:1:profile",
+				"user:2:profile",
+				"order:1:profile",
+				"legacyprofile",
+			},
+		},
+		{
+			name:    "character class",
+			pattern: "user:[12]:profile",
+			want:    []string{"user:1:profile", "user:2:profile"},
+		},
+		{
+			name:    "negated character class",
+			pattern: "user:[^1]:profile",
+			want:    []string{"user:2:profile"},
+		},
+		{
+			name:    "bang negated character class",
+			pattern: "user:[!1]:profile",
+			want:    []string{"user:2:profile"},
+		},
+		{
+			name:    "escaped wildcard",
+			pattern: `literal\*key`,
+			want:    []string{"literal*key"},
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			keys, err := kkey.Keys(test.pattern)
+			be.Err(t, err, nil)
+			got := make([]string, len(keys))
+			for i, key := range keys {
+				got[i] = key.Key
+			}
+			be.Equal(t, got, test.want)
+		})
+	}
+}
+
+func TestKeysFragmentsAfterRename(t *testing.T) {
+	db, kkey := getDB(t)
+
+	_ = db.Str().Set("user:1:profile", "value")
+	err := kkey.Rename("user:1:profile", "user:1:settings")
+	be.Err(t, err, nil)
+
+	keys, err := kkey.Keys("*:settings")
+	be.Err(t, err, nil)
+	be.Equal(t, len(keys), 1)
+	be.Equal(t, keys[0].Key, "user:1:settings")
+
+	keys, err = kkey.Keys("*:profile")
+	be.Err(t, err, nil)
+	be.Equal(t, len(keys), 0)
+}
+
 func TestLen(t *testing.T) {
 	t.Run("len", func(t *testing.T) {
 		db, kkey := getDB(t)

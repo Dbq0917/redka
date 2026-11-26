@@ -50,9 +50,9 @@ var sqlite = queries{
 	from rhash join rkey on kid = rkey.id and type = 4
 	where
 		key = $1 and (etime is null or etime > $2)
-		and rhash.rowid > $3 and field glob $4
+		and rhash.rowid > $3
 	order by rhash.rowid asc
-	limit $5`,
+	limit $4`,
 
 	set1: `
 	insert into

@@ -12,6 +12,9 @@ import (
 // of hash items per page when scanning.
 const scanPageSize = 10
 
+// scanCandidateBatch is the number of items fetched per database round trip.
+const scanCandidateBatch = 256
+
 // SQL queries for the hash repository.
 type queries struct {
 	count   string
@@ -263,27 +266,49 @@ func (tx *Tx) Len(key string) (int, error) {
 // If the key does not exist or is not a hash, returns a nil slice.
 // Supports glob-style patterns. Set count = 0 for default page size.
 func (tx *Tx) Scan(key string, cursor int, pattern string, count int) (ScanResult, error) {
-	pattern = tx.dialect.GlobToLike(pattern)
 	if count == 0 {
 		count = scanPageSize
 	}
 
-	args := []any{
-		key, time.Now().UnixMilli(),
-		cursor, pattern, count,
-	}
+	now := time.Now().UnixMilli()
+	scanCursor := cursor
+	var items []HashItem
 
-	// Select hash items matching the pattern.
-	scan := func(rows *sql.Rows) (HashItem, error) {
-		var it HashItem
-		var val []byte
-		err := rows.Scan(&it.id, &it.Field, &val)
-		it.Value = core.Value(val)
-		return it, err
-	}
-	items, err := sqlx.Select(tx.tx, tx.sql.scan, args, scan)
-	if err != nil {
-		return ScanResult{}, err
+	for len(items) < count {
+		args := []any{key, now, scanCursor, scanCandidateBatch}
+		rows, err := tx.tx.Query(tx.sql.scan, args...)
+		if err != nil {
+			return ScanResult{}, err
+		}
+
+		fetched := 0
+		for rows.Next() {
+			var it HashItem
+			var val []byte
+			err = rows.Scan(&it.id, &it.Field, &val)
+			if err != nil {
+				_ = rows.Close()
+				return ScanResult{}, err
+			}
+			it.Value = core.Value(val)
+			fetched++
+			scanCursor = it.id
+			if !core.MatchGlob(pattern, it.Field) {
+				continue
+			}
+			items = append(items, it)
+			if len(items) == count {
+				break
+			}
+		}
+		err = rows.Err()
+		_ = rows.Close()
+		if err != nil {
+			return ScanResult{}, err
+		}
+		if fetched < scanCandidateBatch {
+			break
+		}
 	}
 
 	// Select the maximum ID.

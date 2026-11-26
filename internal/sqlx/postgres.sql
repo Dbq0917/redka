@@ -25,6 +25,59 @@ create index if not exists
 rkey_etime_idx on rkey (etime)
 where etime is not null;
 
+-- Split keys on fixed separators so that queries containing a complete
+-- key part can use an index instead of scanning the entire keyspace.
+create table if not exists
+rkeypart (
+    kid     integer not null references rkey(id) on delete cascade,
+    part    text not null,
+    revpart text not null,
+    primary key (kid, part)
+);
+
+create index if not exists
+rkeypart_part_idx on rkeypart (part, kid);
+
+create index if not exists
+rkeypart_revpart_idx on rkeypart (revpart, kid);
+
+create or replace function
+rkeypart_refresh_func()
+returns trigger as $$
+begin
+    if tg_op = 'UPDATE' then
+        delete from rkeypart where kid = old.id;
+    end if;
+    insert into rkeypart (kid, part, revpart)
+    select new.id, part, reverse(part)
+    from regexp_split_to_table(new.key, '[:/._|-]') as part
+    where part <> ''
+    on conflict (kid, part) do nothing;
+    return new;
+end;
+$$ language plpgsql;
+
+drop trigger if exists rkeypart_on_insert on rkey;
+create trigger rkeypart_on_insert
+after insert on rkey
+for each row
+execute function rkeypart_refresh_func();
+
+drop trigger if exists rkeypart_on_update on rkey;
+create trigger rkeypart_on_update
+after update of key on rkey
+for each row
+execute function rkeypart_refresh_func();
+
+-- Backfill databases created before the part index existed.
+insert into rkeypart (kid, part, revpart)
+select rkey.id, part, reverse(part)
+from rkey
+cross join lateral regexp_split_to_table(rkey.key, '[:/._|-]') as part
+where part <> ''
+    and not exists (select 1 from rkeypart)
+on conflict (kid, part) do nothing;
+
 create or replace view
 vkey as
 select

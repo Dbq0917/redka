@@ -7,9 +7,9 @@ var postgres = queries{
 	from rzset join rkey on kid = rkey.id and type = 5
 	where
 		key = $1 and (etime is null or etime > $2)
-		and rzset.rowid > $3 and elem like $4
+		and rzset.rowid > $3
 	order by rzset.rowid asc
-	limit $5`,
+	limit $4`,
 }
 
 func init() {

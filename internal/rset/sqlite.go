@@ -147,8 +147,8 @@ var sqlite = queries{
 	from rset join rkey on kid = rkey.id and type = 3
 	where
 		key = $1 and (etime is null or etime > $2)
-		and rset.rowid > $3 and elem glob $4
-	limit $5`,
+		and rset.rowid > $3
+	limit $4`,
 
 	union: `
 	select elem

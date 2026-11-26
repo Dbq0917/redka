@@ -12,6 +12,11 @@ import (
 // of keys per page when scanning.
 const scanPageSize = 10
 
+// scanCandidateBatch is the number of candidate keys fetched per
+// database round trip during a Scan. Candidates may still be rejected
+// by the exact glob matcher.
+const scanCandidateBatch = 256
+
 // SQL queries for the key repository.
 type queries struct {
 	count            string
@@ -21,13 +26,11 @@ type queries struct {
 	deleteNExpired   string
 	expire           string
 	get              string
-	keys             string
 	len              string
 	persist          string
 	random           string
 	rename1          string
 	rename2          string
-	scan             string
 }
 
 // Tx is a key repository transaction.
@@ -129,16 +132,36 @@ func (tx *Tx) Get(key string) (core.Key, error) {
 // Use this method only if you are sure that the number of keys is
 // limited. Otherwise, use the [Tx.Scan] or [Tx.Scanner] methods.
 func (tx *Tx) Keys(pattern string) ([]core.Key, error) {
-	pattern = tx.dialect.GlobToLike(pattern)
-	args := []any{pattern, time.Now().UnixMilli()}
-	scan := func(rows *sql.Rows) (core.Key, error) {
-		var k core.Key
-		err := rows.Scan(&k.ID, &k.Key, &k.Type, &k.Version, &k.ETime, &k.MTime)
-		return k, err
+	filter := newKeyFilter(pattern)
+	query := `
+	select id, key, type, version, etime, mtime from rkey
+	where (etime is null or etime > ?)`
+	args := []any{time.Now().UnixMilli()}
+	query, args = filter.append(query, args)
+	query += " order by id asc"
+	query = tx.dialect.Enumerate(query)
+
+	rows, err := tx.tx.Query(query, args...)
+	if err != nil {
+		return nil, err
 	}
+	defer func() { _ = rows.Close() }()
+
 	var keys []core.Key
-	keys, err := sqlx.Select(tx.tx, tx.sql.keys, args, scan)
-	return keys, err
+	for rows.Next() {
+		var k core.Key
+		err = rows.Scan(&k.ID, &k.Key, &k.Type, &k.Version, &k.ETime, &k.MTime)
+		if err != nil {
+			return nil, err
+		}
+		if core.MatchGlob(pattern, k.Key) {
+			keys = append(keys, k)
+		}
+	}
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+	return keys, nil
 }
 
 // Len returns the total number of keys, including expired ones.
@@ -270,26 +293,56 @@ func (tx *Tx) Scan(cursor int, pattern string, ktype core.TypeID, count int) (Sc
 	if count == 0 {
 		count = scanPageSize
 	}
-	query := tx.sql.scan
+
+	filter := newKeyFilter(pattern)
 	ktypeGuard := ktype == core.TypeAny
-	pattern = tx.dialect.GlobToLike(pattern)
-	args := []any{
-		cursor,
-		pattern,
-		int(ktype),
-		ktypeGuard,
-		time.Now().UnixMilli(),
-		count,
-	}
-	scan := func(rows *sql.Rows) (core.Key, error) {
-		var k core.Key
-		err := rows.Scan(&k.ID, &k.Key, &k.Type, &k.Version, &k.ETime, &k.MTime)
-		return k, err
-	}
+	now := time.Now().UnixMilli()
+	scanCursor := cursor
 	var keys []core.Key
-	keys, err := sqlx.Select(tx.tx, query, args, scan)
-	if err != nil {
-		return ScanResult{}, err
+
+	for len(keys) < count {
+		query := `
+		select id, key, type, version, etime, mtime from rkey
+		where
+			id > ? and (type = ? or ?)
+			and (etime is null or etime > ?)`
+		args := []any{scanCursor, int(ktype), ktypeGuard, now}
+		query, args = filter.append(query, args)
+		query += " order by id asc limit ?"
+		args = append(args, scanCandidateBatch)
+		query = tx.dialect.Enumerate(query)
+
+		rows, err := tx.tx.Query(query, args...)
+		if err != nil {
+			return ScanResult{}, err
+		}
+
+		fetched := 0
+		for rows.Next() {
+			var k core.Key
+			err = rows.Scan(&k.ID, &k.Key, &k.Type, &k.Version, &k.ETime, &k.MTime)
+			if err != nil {
+				_ = rows.Close()
+				return ScanResult{}, err
+			}
+			fetched++
+			scanCursor = k.ID
+			if !core.MatchGlob(pattern, k.Key) {
+				continue
+			}
+			keys = append(keys, k)
+			if len(keys) == count {
+				break
+			}
+		}
+		err = rows.Err()
+		_ = rows.Close()
+		if err != nil {
+			return ScanResult{}, err
+		}
+		if fetched < scanCandidateBatch {
+			break
+		}
 	}
 
 	// Select the maximum ID.

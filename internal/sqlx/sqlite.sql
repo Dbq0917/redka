@@ -27,6 +27,204 @@ create index if not exists
 rkey_etime_idx on rkey (etime)
 where etime is not null;
 
+-- Split keys on fixed separators so that queries containing a complete
+-- key part can use an index instead of scanning the entire keyspace.
+create table if not exists
+rkeypart (
+    kid     integer not null,
+    part    text not null,
+    revpart text not null,
+
+    primary key (kid, part),
+    foreign key (kid) references rkey (id)
+    on delete cascade
+) strict;
+
+create index if not exists
+rkeypart_part_idx on rkeypart (part, kid);
+
+create index if not exists
+rkeypart_revpart_idx on rkeypart (revpart, kid);
+
+create trigger if not exists
+rkeypart_on_insert
+after insert on rkey
+for each row
+begin
+    insert or ignore into rkeypart (kid, part, revpart)
+    select kid, part, revpart from (
+        with recursive
+        src(kid, value) as (
+            select
+                new.id,
+                replace(
+                    replace(
+                        replace(
+                            replace(
+                                replace(
+                                    replace(new.key, ':', char(1)),
+                                    '/', char(1)
+                                ),
+                                '.', char(1)
+                            ),
+                            '_', char(1)
+                        ),
+                        '-', char(1)
+                    ),
+                    '|', char(1)
+                )
+        ),
+        parts(kid, rest, part) as (
+            select kid, value, '' from src
+            union all
+            select
+                kid,
+                case
+                    when instr(rest, char(1)) > 0
+                    then substr(rest, instr(rest, char(1)) + 1)
+                    else ''
+                end,
+                case
+                    when instr(rest, char(1)) > 0
+                    then substr(rest, 1, instr(rest, char(1)) - 1)
+                    else rest
+                end
+            from parts
+            where rest <> ''
+        ),
+        revs(kid, part, rest, revpart) as (
+            select kid, part, part, '' from parts where part <> ''
+            union all
+            select
+                kid,
+                part,
+                substr(rest, 1, length(rest) - 1),
+                revpart||substr(rest, -1)
+            from revs
+            where rest <> ''
+        )
+        select kid, part, revpart from revs where rest = ''
+    );
+end;
+
+create trigger if not exists
+rkeypart_on_update
+after update of key on rkey
+for each row
+begin
+    delete from rkeypart where kid = new.id;
+    insert or ignore into rkeypart (kid, part, revpart)
+    select kid, part, revpart from (
+        with recursive
+        src(kid, value) as (
+            select
+                new.id,
+                replace(
+                    replace(
+                        replace(
+                            replace(
+                                replace(
+                                    replace(new.key, ':', char(1)),
+                                    '/', char(1)
+                                ),
+                                '.', char(1)
+                            ),
+                            '_', char(1)
+                        ),
+                        '-', char(1)
+                    ),
+                    '|', char(1)
+                )
+        ),
+        parts(kid, rest, part) as (
+            select kid, value, '' from src
+            union all
+            select
+                kid,
+                case
+                    when instr(rest, char(1)) > 0
+                    then substr(rest, instr(rest, char(1)) + 1)
+                    else ''
+                end,
+                case
+                    when instr(rest, char(1)) > 0
+                    then substr(rest, 1, instr(rest, char(1)) - 1)
+                    else rest
+                end
+            from parts
+            where rest <> ''
+        ),
+        revs(kid, part, rest, revpart) as (
+            select kid, part, part, '' from parts where part <> ''
+            union all
+            select
+                kid,
+                part,
+                substr(rest, 1, length(rest) - 1),
+                revpart||substr(rest, -1)
+            from revs
+            where rest <> ''
+        )
+        select kid, part, revpart from revs where rest = ''
+    );
+end;
+
+-- Backfill databases created before the part index existed.
+with recursive
+src(kid, value) as (
+    select
+        id,
+        replace(
+            replace(
+                replace(
+                    replace(
+                        replace(
+                            replace(key, ':', char(1)),
+                            '/', char(1)
+                        ),
+                        '.', char(1)
+                    ),
+                    '_', char(1)
+                ),
+                '-', char(1)
+            ),
+            '|', char(1)
+        )
+    from rkey
+    where not exists (select 1 from rkeypart)
+),
+parts(kid, rest, part) as (
+    select kid, value, '' from src
+    union all
+    select
+        kid,
+        case
+            when instr(rest, char(1)) > 0
+            then substr(rest, instr(rest, char(1)) + 1)
+            else ''
+        end,
+        case
+            when instr(rest, char(1)) > 0
+            then substr(rest, 1, instr(rest, char(1)) - 1)
+            else rest
+        end
+    from parts
+    where rest <> ''
+),
+revs(kid, part, rest, revpart) as (
+    select kid, part, part, '' from parts where part <> ''
+    union all
+    select
+        kid,
+        part,
+        substr(rest, 1, length(rest) - 1),
+        revpart||substr(rest, -1)
+    from revs
+    where rest <> ''
+)
+insert or ignore into rkeypart (kid, part, revpart)
+select kid, part, revpart from revs where rest = '';
+
 create view if not exists
 vkey as
 select

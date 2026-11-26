@@ -13,6 +13,12 @@ etime    integer             -- expiration timestamp in unix milliseconds
 mtime    integer not null    -- modification timestamp in unix milliseconds
 len      integer             -- number of child elements
 
+rkeypart
+---
+kid      integer not null    -- FK -> rkey.id
+part     text not null       -- a key fragment split on : / . _ - |
+revpart  text not null       -- part reversed, for suffix lookups
+
 rstring
 ---
 kid      integer not null    -- FK -> rkey.id
@@ -41,6 +47,10 @@ kid      integer not null    -- FK -> rkey.id
 elem     blob not null
 score    real not null
 ```
+
+`rkeypart` is maintained only when a key is created or renamed. It lets
+patterns with complete key fragments (for example `user:*:profile` or
+`*.example.com`) use an index instead of scanning every key.
 
 To access the data with SQL, use views instead of tables:
 

@@ -13,6 +13,9 @@ import (
 // of set items per page when scanning.
 const scanPageSize = 10
 
+// scanCandidateBatch is the number of items fetched per database round trip.
+const scanCandidateBatch = 256
+
 // SQL queries for the set repository.
 type queries struct {
 	add1       string
@@ -338,40 +341,51 @@ func (tx *Tx) Random(key string) (core.Value, error) {
 // If the key does not exist or is not a set, returns an empty slice.
 // Supports glob-style patterns. Set count = 0 for default page size.
 func (tx *Tx) Scan(key string, cursor int, pattern string, count int) (ScanResult, error) {
-	pattern = tx.dialect.GlobToLike(pattern)
 	if count == 0 {
 		count = scanPageSize
 	}
 
-	// Select set items matching the pattern.
-	args := []any{
-		key, time.Now().UnixMilli(),
-		cursor, pattern, count,
-	}
-	var rows *sql.Rows
-	rows, err := tx.tx.Query(tx.sql.scan, args...)
-	if err != nil {
-		return ScanResult{}, err
-	}
-	defer func() { _ = rows.Close() }()
-
-	// Build the resulting slice.
-	maxID := 0
+	now := time.Now().UnixMilli()
+	scanCursor := cursor
 	var elems []core.Value
-	for rows.Next() {
-		var rowID int
-		var val []byte
-		err := rows.Scan(&rowID, &val)
+	maxID := 0
+
+	for len(elems) < count {
+		args := []any{key, now, scanCursor, scanCandidateBatch}
+		rows, err := tx.tx.Query(tx.sql.scan, args...)
 		if err != nil {
 			return ScanResult{}, err
 		}
-		elems = append(elems, core.Value(val))
-		if rowID > maxID {
+
+		fetched := 0
+		for rows.Next() {
+			var rowID int
+			var val []byte
+			err = rows.Scan(&rowID, &val)
+			if err != nil {
+				_ = rows.Close()
+				return ScanResult{}, err
+			}
+			fetched++
+			scanCursor = rowID
+			valb := core.Value(val)
+			if !core.MatchGlob(pattern, string(valb)) {
+				continue
+			}
+			elems = append(elems, valb)
 			maxID = rowID
+			if len(elems) == count {
+				break
+			}
 		}
-	}
-	if rows.Err() != nil {
-		return ScanResult{}, rows.Err()
+		err = rows.Err()
+		_ = rows.Close()
+		if err != nil {
+			return ScanResult{}, err
+		}
+		if fetched < scanCandidateBatch {
+			break
+		}
 	}
 
 	return ScanResult{maxID, elems}, nil
