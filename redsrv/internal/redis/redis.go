@@ -25,6 +25,10 @@ var (
 	ErrSyntaxError       = errors.New("ERR syntax error")
 	ErrUnknownCmd        = errors.New("ERR unknown command")
 	ErrUnknownSubcmd     = errors.New("ERR unknown subcommand")
+	ErrUnwatchArgNum     = errors.New("ERR wrong number of arguments for 'unwatch' command")
+	ErrWatchArgNum       = errors.New("ERR wrong number of arguments for 'watch' command")
+	ErrWatchInsideMulti  = errors.New("ERR WATCH inside MULTI is not allowed")
+	ErrWatchState        = errors.New("ERR failed to read WATCH state")
 )
 
 // Writer is an interface to write responses to the client.

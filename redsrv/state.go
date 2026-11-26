@@ -27,6 +27,15 @@ func getState(conn redcon.Conn) *connState {
 type connState struct {
 	inMulti bool
 	cmds    []redis.Cmd
+	watches map[string]watchState
+}
+
+// watchState is the last known state of a watched key.
+type watchState struct {
+	exists  bool
+	id      int
+	version int
+	mtime   int64
 }
 
 // push adds a command to the state.
@@ -47,6 +56,22 @@ func (s *connState) pop() redis.Cmd {
 // clear removes all commands from the state.
 func (s *connState) clear() {
 	s.cmds = []redis.Cmd{}
+}
+
+// watch records the baseline state of a key if it is not watched yet.
+func (s *connState) watch(key string, state watchState) {
+	if s.watches == nil {
+		s.watches = make(map[string]watchState)
+	}
+	if _, ok := s.watches[key]; ok {
+		return
+	}
+	s.watches[key] = state
+}
+
+// unwatch removes all watched keys.
+func (s *connState) unwatch() {
+	s.watches = nil
 }
 
 // String returns the string representation of the state.
